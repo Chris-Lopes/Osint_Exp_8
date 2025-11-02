@@ -1,0 +1,244 @@
+# Normalization Rules Configuration
+# This file defines how to extract and transform indicators from different sources
+
+# Format:
+# source_name:
+#   rules:
+#     - condition: <condition to match>
+#       mappings:
+#         indicator_type: <type mapping>
+#         value: <value extraction>
+#         confidence: <confidence calculation>
+#         additional_fields: <other field mappings>
+
+virustotal:
+  rules:
+    - condition: "type == 'ip_address'"
+      mappings:
+        indicator_type: "ipv4-addr"
+        value: "{{ value or attributes.get('network', {}).get('ip') }}"
+        confidence: "{{ calculate_vt_confidence(attributes.get('last_analysis_stats', {})) }}"
+        threat_types: "{{ get_vt_threat_types(attributes.get('last_analysis_stats', {})) }}"
+        network_context:
+          country: "{{ attributes.get('country') }}"
+          as_owner: "{{ attributes.get('as_owner') }}"
+          reputation: "{{ calculate_vt_reputation(attributes.get('last_analysis_stats', {})) }}"
+    
+    - condition: "type == 'file'"
+      mappings:
+        indicator_type: "{{ get_hash_type(attributes) }}"
+        value: "{{ get_primary_hash(attributes) }}"
+        confidence: "{{ calculate_vt_confidence(attributes.get('last_analysis_stats', {})) }}"
+        threat_types: "{{ get_vt_threat_types(attributes.get('last_analysis_stats', {})) }}"
+        file_context:
+          size: "{{ attributes.get('size') }}"
+          file_type: "{{ attributes.get('type_description') or attributes.get('file_type') }}"
+          md5: "{{ attributes.get('md5') }}"
+          sha1: "{{ attributes.get('sha1') }}"
+          sha256: "{{ attributes.get('sha256') }}"
+
+    - condition: "type == 'domain'"
+      mappings:
+        indicator_type: "domain-name"
+        value: "{{ value or id }}"
+        confidence: "{{ calculate_vt_confidence(attributes.get('last_analysis_stats', {})) }}"
+        threat_types: "{{ get_vt_threat_types(attributes.get('last_analysis_stats', {})) }}"
+
+urlhaus:
+  rules:
+    - condition: "url is defined"
+      mappings:
+        indicator_type: "url"
+        value: "{{ url }}"
+        confidence: "{{ calculate_urlhaus_confidence(url_status, threat) }}"
+        threat_types: "{{ map_urlhaus_threat_type(threat) }}"
+        tags: "{{ tags or [] }}"
+        description: "{{ threat }} - URLhaus"
+        network_context:
+          status: "{{ url_status }}"
+
+alienvault_otx:
+  rules:
+    - condition: "type == 'IPv4'"
+      mappings:
+        indicator_type: "ipv4-addr"
+        value: "{{ indicator }}"
+        confidence: "{{ calculate_otx_confidence(pulse_info) }}"
+        description: "{{ description }}"
+        threat_types: "{{ get_otx_threat_types(pulse_info) }}"
+        tags: "{{ get_otx_tags(pulse_info) }}"
+
+    - condition: "type == 'domain'"
+      mappings:
+        indicator_type: "domain-name" 
+        value: "{{ indicator }}"
+        confidence: "{{ calculate_otx_confidence(pulse_info) }}"
+        description: "{{ description }}"
+        threat_types: "{{ get_otx_threat_types(pulse_info) }}"
+
+    - condition: "type == 'URL'"
+      mappings:
+        indicator_type: "url"
+        value: "{{ indicator }}"
+        confidence: "{{ calculate_otx_confidence(pulse_info) }}"
+        description: "{{ description }}"
+
+    - condition: "type in ['FileHash-MD5', 'FileHash-SHA1', 'FileHash-SHA256']"
+      mappings:
+        indicator_type: "{{ type.lower().replace('filehash-', 'file:hashes.') }}"
+        value: "{{ indicator }}"
+        confidence: "{{ calculate_otx_confidence(pulse_info) }}"
+        description: "{{ description }}"
+
+abuse_ch_malware_bazaar:
+  rules:
+    - condition: "sha256_hash is defined"
+      mappings:
+        indicator_type: "file:hashes.sha256"
+        value: "{{ sha256_hash }}"
+        confidence: "{{ 85 if signature else 70 }}"
+        threat_types: "{{ [malware_family] if malware_family else [] }}"
+        malware_families: "{{ [malware_family] if malware_family else [] }}"
+        file_context:
+          size: "{{ file_size }}"
+          file_type: "{{ file_type }}"
+          signature: "{{ signature }}"
+
+abuse_ch_threatfox:
+  rules:
+    - condition: "ioc_type == 'ip:port'"
+      mappings:
+        indicator_type: "ipv4-addr"
+        value: "{{ ioc_value.split(':')[0] }}"
+        confidence: "{{ confidence_level * 20 }}"  # Convert 1-5 scale to 0-100
+        threat_types: "{{ [threat_type] }}"
+        malware_families: "{{ [malware] if malware != 'n/a' else [] }}"
+        network_context:
+          port: "{{ ioc_value.split(':')[1] if ':' in ioc_value else null }}"
+
+    - condition: "ioc_type == 'domain'"
+      mappings:
+        indicator_type: "domain-name"
+        value: "{{ ioc_value }}"
+        confidence: "{{ confidence_level * 20 }}"
+        threat_types: "{{ [threat_type] }}"
+        malware_families: "{{ [malware] if malware != 'n/a' else [] }}"
+
+    - condition: "ioc_type == 'url'"
+      mappings:
+        indicator_type: "url"
+        value: "{{ ioc_value }}"
+        confidence: "{{ confidence_level * 20 }}"
+        threat_types: "{{ [threat_type] }}"
+        malware_families: "{{ [malware] if malware != 'n/a' else [] }}"
+
+shodan:
+  rules:
+    - condition: "ip_str is defined"
+      mappings:
+        indicator_type: "ipv4-addr"
+        value: "{{ ip_str }}"
+        confidence: "{{ calculate_shodan_confidence(ports, vulns) }}"
+        network_context:
+          country: "{{ location.country_name }}"
+          city: "{{ location.city }}"
+          org: "{{ org }}"
+          isp: "{{ isp }}"
+          ports: "{{ ports }}"
+          hostnames: "{{ hostnames }}"
+          domains: "{{ domains }}"
+
+# Helper function definitions for confidence calculations
+confidence_functions:
+  calculate_vt_confidence:
+    description: "Calculate confidence based on VirusTotal analysis stats"
+    implementation: |
+      def calculate_vt_confidence(stats):
+          if not stats:
+              return 50
+          malicious = stats.get('malicious', 0)
+          clean = stats.get('clean', 0)
+          total = malicious + clean + stats.get('undetected', 0) + stats.get('suspicious', 0)
+          if total == 0:
+              return 50
+          malicious_ratio = malicious / total
+          if malicious_ratio > 0.3:
+              return min(90, 50 + (malicious_ratio * 40))
+          elif malicious_ratio > 0.1:
+              return min(70, 40 + (malicious_ratio * 30))
+          else:
+              return max(30, 50 - (clean / total * 20))
+
+  calculate_urlhaus_confidence:
+    description: "Calculate confidence for URLhaus indicators"
+    implementation: |
+      def calculate_urlhaus_confidence(status, threat):
+          base_confidence = 70
+          if status == 'online':
+              base_confidence += 15
+          elif status == 'offline':
+              base_confidence += 5
+          
+          if threat in ['malware_download', 'botnet_cc']:
+              base_confidence += 10
+          
+          return min(95, base_confidence)
+
+  calculate_otx_confidence:
+    description: "Calculate confidence for AlienVault OTX indicators"
+    implementation: |
+      def calculate_otx_confidence(pulse_info):
+          if not pulse_info:
+              return 60
+          pulse_count = pulse_info.get('count', 0)
+          if pulse_count >= 5:
+              return 85
+          elif pulse_count >= 2:
+              return 75
+          else:
+              return 65
+
+  calculate_shodan_confidence:
+    description: "Calculate confidence for Shodan indicators"
+    implementation: |
+      def calculate_shodan_confidence(ports, vulns):
+          base_confidence = 60
+          if vulns:
+              base_confidence += len(vulns) * 5
+          if ports and len(ports) > 10:
+              base_confidence += 10
+          return min(90, base_confidence)
+
+# Type mapping functions
+type_mapping_functions:
+  get_hash_type:
+    description: "Determine hash type from VirusTotal attributes"
+    implementation: |
+      def get_hash_type(attributes):
+          if attributes.get('sha256'):
+              return 'file:hashes.sha256'
+          elif attributes.get('sha1'):
+              return 'file:hashes.sha1'
+          elif attributes.get('md5'):
+              return 'file:hashes.md5'
+          else:
+              return 'file:hashes.sha256'
+
+  get_primary_hash:
+    description: "Get the primary hash value from VirusTotal attributes"
+    implementation: |
+      def get_primary_hash(attributes):
+          return (attributes.get('sha256') or 
+                  attributes.get('sha1') or 
+                  attributes.get('md5') or 
+                  attributes.get('id'))
+
+# Default fallback rules for unknown sources
+default:
+  rules:
+    - condition: "true"  # Catch-all rule
+      mappings:
+        indicator_type: "{{ detect_indicator_type(value or indicator or id) }}"
+        value: "{{ value or indicator or id }}"
+        confidence: 50
+        description: "Indicator from {{ source_name }}"

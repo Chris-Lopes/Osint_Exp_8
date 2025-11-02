@@ -1,0 +1,18 @@
+{
+  "run_timestamp": "2025-10-06T00:40:27.959881",
+  "execution_duration_seconds": 0.8422513008117676,
+  "success": true,
+  "reports_generated": {
+    "execution_report": true,
+    "insights_report": true,
+    "summary_text": true
+  },
+  "data_processed": {
+    "scored_files": 0,
+    "rules_generated": 0
+  },
+  "key_metrics": {
+    "total_execution_time": ".2f",
+    "pipeline_steps_completed": 6
+  }
+}

@@ -1,0 +1,325 @@
+project:
+  name: threat-aggregation-lab
+  data_dir: data
+  raw_dir: data/raw
+  processed_dir: data/processed
+  stix_dir: data/stix
+
+http:
+  timeout_seconds: 30
+  user_agent: ${GENERIC_USER_AGENT}
+  retries:
+    total: 3
+    backoff_factor: 0.5
+
+sources:
+  # AlienVault OTX
+  - key: otx_indicators
+    enabled: true
+    type: generic_rest
+    base_url: "https://otx.alienvault.com/api/v1"
+    auth_type: header
+    auth_env_key: API_KEY_OTX
+    endpoints:
+      - path: "/indicators/export"
+        params:
+          limit_param: "limit"
+          page_param: "page" 
+          date_param: "modified_since"
+          default_limit: 1000
+          default_lookback_days: 7
+    rate_limit:
+      req_per_min: 10
+    headers:
+      Accept: "application/json"
+
+  # URLhaus (No API key required)
+  - key: urlhaus_recent
+    enabled: true
+    type: feed_csv
+    url: "https://urlhaus.abuse.ch/downloads/csv_recent/"
+    has_header: true
+    delimiter: ","
+    default_lookback_days: 1
+
+  # MalwareBazaar
+  - key: malwarebazaar_recent
+    enabled: true
+    type: feed_json
+    url: "https://mb-api.abuse.ch/api/v1/"
+    default_lookback_days: 1
+
+  # Spamhaus DROP List
+  - key: spamhaus_drop
+    enabled: true
+    type: feed_csv
+    url: "https://www.spamhaus.org/drop/drop.txt"
+    has_header: false
+    delimiter: ";"
+    default_lookback_days: 1
+
+  # PhishTank (No API key required for feed)
+  - key: phishtank_feed
+    enabled: true
+    type: feed_csv
+    url: "http://data.phishtank.com/data/online-valid.csv"
+    has_header: true
+    delimiter: ","
+    default_lookback_days: 1
+
+  # VirusTotal (requires API key for detailed access)
+  - key: virustotal_intel
+    enabled: false
+    type: generic_rest
+    base_url: "https://www.virustotal.com/vtapi/v2"
+    auth_type: query
+    auth_env_key: API_KEY_VIRUSTOTAL
+    endpoints:
+      - path: "/file/search"
+        params:
+          limit_param: "limit"
+          date_param: "query"
+          default_limit: 300
+          default_lookback_days: 1
+    rate_limit:
+      req_per_min: 4
+
+  # AbuseIPDB
+  - key: abuseipdb_blacklist
+    enabled: false
+    type: generic_rest
+    base_url: "https://api.abuseipdb.com/api/v2"
+    auth_type: header
+    auth_env_key: API_KEY_ABUSEIPDB
+    endpoints:
+      - path: "/blacklist"
+        params:
+          limit_param: "limit"
+          default_limit: 10000
+          default_lookback_days: 1
+    rate_limit:
+      req_per_min: 60
+    headers:
+      Accept: "application/json"
+
+  # Shodan
+  - key: shodan_honeypot
+    enabled: false
+    type: generic_rest
+    base_url: "https://api.shodan.io"
+    auth_type: query
+    auth_env_key: API_KEY_SHODAN
+    endpoints:
+      - path: "/shodan/host/search"
+        params:
+          query_param: "query"
+          default_limit: 100
+          default_lookback_days: 1
+    rate_limit:
+      req_per_min: 60
+
+  # GreyNoise
+  - key: greynoise_community
+    enabled: false
+    type: generic_rest
+    base_url: "https://api.greynoise.io/v3"
+    auth_type: header
+    auth_env_key: API_KEY_GREYNOISE
+    endpoints:
+      - path: "/community"
+        params:
+          default_limit: 1000
+          default_lookback_days: 1
+    rate_limit:
+      req_per_min: 60
+
+  # MITRE ATT&CK (No API key required)
+  - key: mitre_attack
+    enabled: true
+    type: feed_json
+    url: "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json"
+    default_lookback_days: 7
+
+  # CVE feeds from NVD
+  - key: nvd_cve_recent
+    enabled: true
+    type: generic_rest
+    base_url: "https://services.nvd.nist.gov/rest/json/cves/2.0"
+    auth_type: none
+    endpoints:
+      - path: "/cves"
+        params:
+          results_per_page: 2000
+          start_index: 0
+          default_lookback_days: 7
+    rate_limit:
+      req_per_min: 50
+
+  # CWE data
+  - key: cwe_data
+    enabled: true
+    type: feed_xml
+    url: "https://cwe.mitre.org/data/xml/cwec_latest.xml.zip"
+    default_lookback_days: 30
+
+  # CISA KEV Catalog
+  - key: cisa_kev
+    enabled: true
+    type: feed_json
+    url: "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+    default_lookback_days: 1
+
+normalization:
+  target_schema: stix_like
+  fields: [indicator, indicator_type, first_seen, last_seen, source, confidence, references]
+
+enrichers:
+  - key: enr_virustotal
+    enabled: false
+    type: generic_rest
+    base_url: "https://www.virustotal.com/vtapi/v2"
+    auth_type: query
+    auth_env_key: API_KEY_VIRUSTOTAL
+    types: ["ipv4", "domain", "url", "sha256", "sha1", "md5"]
+    request:
+      method: GET
+      path_template: "/ip-address/report"
+      query_params:
+        - from: indicator
+          as: "resource"
+          transform: none
+    rate_limit:
+      req_per_min: 4
+    response_map:
+      reputation: "positives"
+      categories: "detected_urls"
+      asn: "asn"
+      geo: "country"
+
+  - key: enr_abuseipdb
+    enabled: false
+    type: generic_rest
+    base_url: "https://api.abuseipdb.com/api/v2"
+    auth_type: header
+    auth_env_key: API_KEY_ABUSEIPDB
+    types: ["ipv4"]
+    request:
+      method: GET
+      path_template: "/check"
+      query_params:
+        - from: indicator
+          as: "ipAddress"
+          transform: none
+    rate_limit:
+      req_per_min: 1000
+    response_map:
+      reputation: "abuseConfidencePercentage"
+      categories: "usage"
+      geo: "countryCode"
+
+merge_policy:
+  key_fields: ["indicator", "indicator_type"]
+  fuzzy:
+    enabled: true
+    token_ratio_threshold: 92
+  precedence:
+    sources: ["otx_indicators", "cisa_kev", "nvd_cve_recent", "urlhaus_recent", "malwarebazaar_recent", "spamhaus_drop", "phishtank_feed"]
+    prefer_newest: ["first_seen", "last_seen"]
+  confidence:
+    normalize_map:
+      "": "medium"
+      "unknown": "medium"
+      "low": "low" 
+      "medium": "medium"
+      "high": "high"
+    bucket_to_score:
+      "low": 0.3
+      "medium": 0.6
+      "high": 0.9
+    combine: "weighted_max"
+  union_fields: ["labels", "references", "attack_ids", "cve_ids", "cwe_ids"]
+  concat_fields: []
+  out_dir: "data/merged"
+
+correlation:
+  out_dir: "data/graph"
+  nodes:
+    indicator: { key: "Indicator", id_fields: ["indicator","indicator_type"] }
+    technique: { key: "Technique", id_fields: ["attack_id"] }
+    vulnerability: { key: "Vulnerability", id_fields: ["cve_id"] }
+    weakness: { key: "Weakness", id_fields: ["cwe_id"] }
+    malware: { key: "Malware", id_fields: ["name"] }
+    asn: { key: "ASN", id_fields: ["asn"] }
+    country: { key: "Country", id_fields: ["cc"] }
+    reference: { key: "Reference", id_fields: ["url"] }
+    source: { key: "Source", id_fields: ["source_key"] }
+  edges:
+    indicates: { key: "INDICATES", base_weight: 0.7 }
+    linked_to: { key: "LINKED_TO", base_weight: 0.5 }
+    observed_in: { key: "OBSERVED_IN", base_weight: 0.6 }
+    hosted_on: { key: "HOSTED_ON", base_weight: 0.5 }
+    located_in: { key: "LOCATED_IN", base_weight: 0.4 }
+    referenced_by: { key: "REFERENCED_BY", base_weight: 0.3 }
+    supplied_by: { key: "SUPPLIED_BY", base_weight: 0.3 }
+  rules:
+    attach_attack_ids: true
+    parse_attack_from_text: true
+    attach_cves: true
+    attach_cwes: true
+    attach_malware_families: true
+    attach_asn_geo: true
+    attach_references: true
+    attach_source: true
+  scoring:
+    half_life_days: 30
+    min_weight: 0.2
+    max_weight: 1.0
+
+scoring:
+  out_dir: "data/scored"
+  recency:
+    half_life_days: 30
+    floor: 0.3
+  trust:
+    top_source_bonus: 1.0
+    mid_source_bonus: 0.9
+    other_source_bonus: 0.8
+  confidence:
+    low: 0.7
+    medium: 0.9
+    high: 1.0
+  signals:
+    reputation:
+      enabled: true
+      map_min: 0
+      map_max: 100
+      cap: 0.35
+    categories:
+      enabled: true
+      weights:
+        phishing: 0.10
+        malware: 0.15
+        c2: 0.20
+        botnet: 0.15
+        spam: 0.05
+      cap: 0.30
+    malware_families:
+      enabled: true
+      per_family: 0.10
+      cap: 0.30
+    graph:
+      enabled: true
+      degree_weight: 0.15
+      technique_weight: 0.20
+      cve_weight: 0.20
+      cap: 0.45
+  bands:
+    critical: 0.85
+    high: 0.70
+    medium: 0.50
+  budget:
+    enabled: true
+    max_alerts: 500
+
+log:
+  level: INFO
