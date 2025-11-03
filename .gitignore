@@ -18,3 +18,5 @@ data/.cache/
 logs/
 .DS_Store
 Thumbs.db
+.github/
+
