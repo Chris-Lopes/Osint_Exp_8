@@ -1,4 +1,4 @@
-# 🛡️ Threat Aggregation Lab
+# 🛡️ OSINT
 
 ### End-to-End Security Operations Center (SOC) Intelligence Pipeline
 
